@@ -232,7 +232,7 @@ const authMiddleware = require("../middleware/auth");
 const roleMiddleware = require("../middleware/roleMiddleware");
 
 // ✅ Get All Projects with Their Tasks
-router.get("/", authMiddleware, async (req, res) => {
+router.get("/details", authMiddleware, async (req, res) => {
     try {
         let projects;
         if (req.user.role === "ADMIN") {

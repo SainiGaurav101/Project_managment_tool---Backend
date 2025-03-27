@@ -444,59 +444,6 @@ router.delete("/:id", authMiddleware, roleMiddleware(["ADMIN", "MANAGER"]), asyn
 
 
 // ✅ Project Report API - Get a detailed report of a project
-// router.get("/:projectId/report", authMiddleware, async (req, res) => {
-//     try {
-//         const { projectId } = req.params;
-
-//         // ✅ Fetch project details
-//         const project = await Board.findByPk(projectId, {
-//             include: [
-//                 { model: User, as: "manager", attributes: ["id", "name", "role", "profile_picture"] },
-//                 { model: User, as: "assignedUsers", attributes: ["id", "name", "role", "profile_picture"] }
-//             ]
-//         });
-
-//         if (!project) return res.status(404).json({ message: "Project not found" });
-
-//         // ✅ Fetch all tasks of the project
-//         const tasks = await Task.findAll({
-//             where: { boardId: projectId },
-//             include: [
-//                 { model: User, as: "assignedUsers", attributes: ["id", "name", "email"] },
-//                 { model: User, as: "creator", attributes: ["id", "name", "role"] }
-//             ]
-//         });
-
-//         // ✅ Calculate task completion percentage
-//         const totalTasks = tasks.length;
-//         const completedTasks = tasks.filter(task => task.status === "done").length;
-//         const completionRate = totalTasks > 0 ? parseFloat(((completedTasks / totalTasks) * 100).toFixed(2)) : 0;
-
-//         res.status(200).json({
-//             project: {
-//                 id: project.id,
-//                 name: project.name,  // Ensure correct field name
-//                 created_by: project.created_by,
-//                 company: project.company,  // Ensure correct field name
-//                 deadline: project.deadline,
-//                 status: project.status,
-//                 createdAt: project.createdAt,
-//                 manager: project.manager,
-//                 assignedUsers: project.assignedUsers
-//             },
-//             tasks,
-//             completionRate
-//         });
-//     } catch (error) {
-//         res.status(500).json({ message: "Error fetching project report", error: error.message });
-//     }
-// });
-
-
-
-
-
-
 
 router.get("/:projectId/report", authMiddleware, async (req, res) => {
     try {
@@ -547,6 +494,129 @@ router.get("/:projectId/report", authMiddleware, async (req, res) => {
         res.status(500).json({ message: "Error fetching project report", error: error.message });
     }
 });
+
+
+// ✅ Get All Tasks in the Database (For Pie Chart & Reporting)
+
+router.get("/tasks/all", authMiddleware, roleMiddleware(["ADMIN", "MANAGER","MEMBER"]), async (req, res) => {
+    try {
+        const tasks = await Task.findAll({
+            include: [
+                { model: User, as: "assignedUsers", attributes: ["id", "name", "email"] },
+                { model: User, as: "creator", attributes: ["id", "name", "role"] }
+            ],
+            attributes: ["id", "title", "status", "priority", "createdAt"]
+        });
+
+        if (!tasks.length) return res.status(404).json({ message: "No tasks found in the database." });
+
+        res.status(200).json(tasks);
+    } catch (error) {
+        console.error("❌ Error fetching all tasks:", error);
+        res.status(500).json({ message: "Error fetching tasks", error: error.message });
+    }
+});
+
+
+// ✅ Get Task Stats for Pie Chart (Role-Based)
+// router.get("/tasks/stats", authMiddleware, async (req, res) => {
+//     try {
+//         const user = req.user; // Get the logged-in user
+//         let tasks;
+
+//         if (user.role === "ADMIN") {
+//             // ✅ Admin: Get all tasks
+//             tasks = await Task.findAll({ attributes: ["status"] });
+//         } else if (user.role === "MANAGER") {
+//             // ✅ Manager: Get tasks where they are the creator
+//             tasks = await Task.findAll({
+//                 where: { created_by: user.id },
+//                 attributes: ["status"]
+//             });
+//         } else {
+//             // ✅ Member: Get tasks where they are assigned
+//             tasks = await Task.findAll({
+//                 include: {
+//                     model: TaskAssignedUsers,
+//                     where: { user_id: user.id },
+//                     attributes: [] // No need to fetch extra columns
+//                 },
+//                 attributes: ["status"]
+//             });
+//         }
+
+//         // ✅ Count tasks based on their status
+//         const taskStats = {
+//             todo: 0,
+//             in_progress: 0,
+//             done: 0
+//         };
+
+//         tasks.forEach(task => {
+//             if (task.status === "todo") taskStats.todo++;
+//             else if (task.status === "in_progress") taskStats.in_progress++;
+//             else if (task.status === "done") taskStats.done++;
+//         });
+
+//         res.status(200).json(taskStats);
+//     } catch (error) {
+//         console.error("❌ Error fetching task stats:", error);
+//         res.status(500).json({ message: "Error fetching task statistics", error: error.message });
+//     }
+// });
+
+
+// router.get("/tasks/all", authMiddleware, roleMiddleware(["ADMIN", "MANAGER", "MEMBER"]), async (req, res) => {
+//     try {
+//         const user = req.user;
+//         let whereCondition = {}; // Default: Admin sees all
+
+//         if (user.role === "MANAGER") {
+//             // ✅ Managers see tasks in projects they are assigned to or created
+//             const projectIds = await ProjectAssignedUser.findAll({
+//                 where: { user_id: user.id },
+//                 attributes: ["project_id"]
+//             });
+//             const projectIdList = projectIds.map(p => p.project_id);
+//             whereCondition = { boardId: projectIdList };
+//         }
+
+//         if (user.role === "MEMBER") {
+//             // ✅ Members see only tasks assigned to them
+//             const assignedTaskIds = await TaskAssignedUsers.findAll({
+//                 where: { user_id: user.id },
+//                 attributes: ["task_id"]
+//             });
+//             const taskIdList = assignedTaskIds.map(t => t.task_id);
+//             whereCondition = { id: taskIdList };
+//         }
+
+//         const tasks = await Task.findAll({
+//             where: whereCondition,
+//             include: [
+//                 {
+//                     model: User,
+//                     as: "assignedUsers",
+//                     attributes: ["id", "name", "email"],
+//                     through: { attributes: [] } // Hide TaskAssignedUsers details
+//                 },
+//                 { model: User, as: "creator", attributes: ["id", "name", "role"] }
+//             ],
+//             attributes: ["id", "title", "status", "priority", "createdAt"]
+//         });
+
+//         return res.status(200).json(tasks);
+//     } catch (error) {
+//         console.error("❌ Error fetching tasks:", error);
+//         res.status(500).json({ message: "Error fetching tasks", error: error.message });
+//     }
+// });
+
+
+
+
+
+
 
 
 module.exports = router;
