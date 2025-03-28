@@ -38,16 +38,16 @@ const Board = sequelize.define("Board", {
         allowNull: false,
         defaultValue: DataTypes.NOW, // Ensures createdAt gets a default value
     },
+    deleted_at: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
 }, {
-    tableName: "boards",
-    timestamps: false,  // `updatedAt` is not present in your DB
+    tableName: 'boards',
+    timestamps: true,  // ✅ Ensure timestamps exist (createdAt, updatedAt)
+    paranoid: true, // ✅ Enables soft delete in Sequelize
+    deletedAt: "deleted_at", // `updatedAt` is not present in your DB
 });
 
-
-// const Task = require("./Task");
-
-
-// Board.hasMany(Task, { foreignKey: "boardId", onDelete: "CASCADE" }); // A board can have multiple tasks
-// Board.belongsTo(User, { foreignKey: "created_by", as: "manager" }); // A board is created by a manager
 
 module.exports = Board;

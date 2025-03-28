@@ -155,6 +155,7 @@ const roleMiddleware = require("../middleware/roleMiddleware");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const { Op } = require("sequelize");
 
 // ✅ Storage configuration for profile pictures
 const storage = multer.diskStorage({
@@ -195,29 +196,71 @@ router.get("/", authMiddleware, roleMiddleware(["admin", "manager"]), async (req
 
 
 // ✅ Delete a user - Only Admin can delete users
+// router.delete("/:id", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
+//     try {
+//         const userId = req.params.id;
+
+//         // Prevent admin from deleting themselves
+//         if (req.user.id.toString() === userId) {
+//             return res.status(403).json({ message: "Admins cannot delete their own account" });
+//         }
+
+//         // Check if user exists before deleting
+//         const user = await User.findOne({ where: { id: userId } });
+//         if (!user) {
+//             return res.status(404).json({ message: "User not found" });
+//         }
+
+
+//          // ❌ Prevent an admin from deleting another admin
+//          if (user.role === "admin") {
+//             return res.status(403).json({ message: "Admins cannot delete other admins" });
+//         }
+
+//         // ✅ Remove user from all projects before deleting
+//         await user.setAssignedProjects([]); // This will remove all project associations
+
+//         // ✅ Delete profile picture if not default
+//         if (user.profile_picture && user.profile_picture !== "default-profile.png") {
+//             const filePath = path.join(__dirname, "../uploads", user.profile_picture);
+//             if (fs.existsSync(filePath)) {
+//                 fs.unlinkSync(filePath);
+//             }
+//         }
+
+//         // ✅ Delete user
+//         await user.destroy();
+
+//         res.status(200).json({ message: "User deleted successfully" });
+//     } catch (error) {
+//         console.error("❌ Error deleting user:", error.message);
+//         res.status(500).json({ message: "Error deleting user", error: error.message });
+//     }
+// });
+
+// ✅ Soft delete a user - Only Admin can delete users
 router.delete("/:id", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
     try {
         const userId = req.params.id;
 
-        // Prevent admin from deleting themselves
+        // ❌ Prevent an admin from deleting themselves
         if (req.user.id.toString() === userId) {
             return res.status(403).json({ message: "Admins cannot delete their own account" });
         }
 
-        // Check if user exists before deleting
+        // ✅ Check if user exists
         const user = await User.findOne({ where: { id: userId } });
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
 
-
-         // ❌ Prevent an admin from deleting another admin
-         if (user.role === "admin") {
+        // ❌ Prevent an admin from deleting another admin
+        if (user.role === "admin") {
             return res.status(403).json({ message: "Admins cannot delete other admins" });
         }
 
         // ✅ Remove user from all projects before deleting
-        await user.setAssignedProjects([]); // This will remove all project associations
+        await user.setAssignedProjects([]); // Removes project associations
 
         // ✅ Delete profile picture if not default
         if (user.profile_picture && user.profile_picture !== "default-profile.png") {
@@ -227,15 +270,91 @@ router.delete("/:id", authMiddleware, roleMiddleware(["admin"]), async (req, res
             }
         }
 
-        // ✅ Delete user
+        // ✅ Soft delete the user instead of permanent delete
         await user.destroy();
 
-        res.status(200).json({ message: "User deleted successfully" });
+        res.status(200).json({ message: "User moved to trash successfully" });
     } catch (error) {
         console.error("❌ Error deleting user:", error.message);
         res.status(500).json({ message: "Error deleting user", error: error.message });
     }
 });
+
+// ✅ Restore Deleted User (Only Admin)
+router.put("/restore/:id", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
+    try {
+        const userId = req.params.id;
+
+        // ✅ Find soft-deleted user
+        const user = await User.findOne({ where: { id: userId }, paranoid: false });
+        if (!user || user.deleted_at === null) {
+            return res.status(404).json({ message: "User not found or not deleted" });
+        }
+
+        // ✅ Restore user by setting deleted_at = NULL
+        await user.restore();
+
+        res.status(200).json({ message: "User restored successfully" });
+    } catch (error) {
+        console.error("❌ Error restoring user:", error.message);
+        res.status(500).json({ message: "Error restoring user", error: error.message });
+    }
+});
+
+//Op is used to create advanced queries like Op.ne (not equal), Op.like, etc.
+// It is part of Sequelize and allows you to build complex queries using operators.
+// ✅ Get all deleted users (trash) - Only Admin can access
+//If Op is not imported, Sequelize doesn’t recognize it, causing the error.
+// const { Op } = require("sequelize");
+router.get("/trash", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
+    try {
+        const deletedUsers = await User.findAll({ 
+            where: { deleted_at: { [Op.ne]: null } }, 
+            paranoid: false 
+        });
+
+        res.status(200).json({ deletedUsers });
+    } catch (error) {
+        console.error("❌ Error fetching deleted users:", error.message);
+        res.status(500).json({ message: "Error fetching deleted users" });
+    }
+});
+ 
+router.delete("/trash/:id", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
+    try {
+        const userId = req.params.id;
+
+        // Find the user
+        const user = await User.findOne({ where: { id: userId }, paranoid: false });
+        if (!user) {
+            return res.status(404).json({ message: "User not found in trash" });
+        }
+
+        // Delete profile picture if not default
+        if (user.profile_picture && user.profile_picture !== "default-profile.png") {
+            const filePath = path.join(__dirname, "../uploads", user.profile_picture);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        // Permanently delete the user
+        await user.destroy({ force: true });
+
+        res.status(200).json({ message: "User permanently deleted" });
+    } catch (error) {
+        console.error("❌ Error permanently deleting user:", error.message);
+        res.status(500).json({ message: "Error permanently deleting user" });
+    }
+});
+
+
+
+
+
+
+
+
 
 
 // ✅ Update user details - Only Admin can edit users

@@ -230,6 +230,7 @@ const User = require("../models/User");
 const ProjectAssignedUser = require("../models/ProjectAssignedUser"); // Many-to-Many Table
 const authMiddleware = require("../middleware/auth");
 const roleMiddleware = require("../middleware/roleMiddleware");
+const { Op } = require("sequelize"); // Import Op for advanced queries
 
 // ✅ Get All Projects with Their Tasks
 router.get("/details", authMiddleware, async (req, res) => {
@@ -361,17 +362,22 @@ router.post("/:id/add-members", authMiddleware, roleMiddleware(["ADMIN", "MANAGE
 // ✅ Admin fetches all projects with assigned users
 router.get("/all", authMiddleware, roleMiddleware(["ADMIN"]), async (req, res) => {
     try {
+        console.log("Board Associations:", Board.associations);
+        console.log("User Associations:", User.associations);
         const projects = await Board.findAll({
+            
             include: [
                 {
                     model: User,
                     as: "assignedUsers",
                     attributes: ["id", "name", "role"],
-                    through: { attributes: [] }, // Exclude pivot table details
+                    through: { attributes: [] }, // Exclude pivot table details 
+                    // paranoid: false,  // 🔥 This ensures soft-deleted users are included
                 }
-            ]
+            ],
+            // paranoid: false,  // 🔥 This ensures soft-deleted projects are included
         });
-
+        console.log("Fetched Projects:", JSON.stringify(projects, null, 2));
         res.status(200).json(projects);
     } catch (error) {
         res.status(500).json({ message: "Error fetching projects", error: error.message });
@@ -407,24 +413,128 @@ router.get("/my-projects", authMiddleware, roleMiddleware(["MANAGER"]), async (r
 
 
 // ✅ Delete a Project (Only ADMIN)
+// router.delete("/:id", authMiddleware, roleMiddleware(["ADMIN"]), async (req, res) => {
+//     try {
+//         const BoardId = req.params.id;
+
+//         // ✅ First, delete related tasks
+//         await Task.destroy({ where: { boardId: BoardId } });
+
+//         // ✅ Remove project assignments from `ProjectAssignedUser`
+//         await ProjectAssignedUser.destroy({ where: { project_id: BoardId} });
+
+//         // ✅ Then, delete the project
+//         await Board.destroy({ where: { id: BoardId } });
+
+//         res.status(200).json({ message: "Project deleted successfully" });
+//     } catch (error) {
+//         res.status(500).json({ message: "Error deleting project", error: error.message });
+//     }
+// });
+
+
+// ✅ Soft Delete a Project (Only ADMIN)
 router.delete("/:id", authMiddleware, roleMiddleware(["ADMIN"]), async (req, res) => {
     try {
-        const BoardId = req.params.id;
+        const boardId = req.params.id;
 
-        // ✅ First, delete related tasks
-        await Task.destroy({ where: { boardId: BoardId } });
+        // ✅ Check if the project exists
+        const board = await Board.findOne({ where: { id: boardId } });
+        if (!board) {
+            return res.status(404).json({ message: "Project not found" });
+        }
 
-        // ✅ Remove project assignments from `ProjectAssignedUser`
-        await ProjectAssignedUser.destroy({ where: { project_id: BoardId} });
+        // ✅ Soft delete related tasks (if tasks also have soft delete enabled)
+        await Task.update({ deleted_at: new Date() }, { where: { boardId: boardId } });
 
-        // ✅ Then, delete the project
-        await Board.destroy({ where: { id: BoardId } });
+        // ✅ Soft delete project assignments
+        await ProjectAssignedUser.update({ deleted_at: new Date() }, { where: { project_id: boardId } });
 
-        res.status(200).json({ message: "Project deleted successfully" });
+        // ✅ Soft delete the project instead of permanent delete
+        await board.destroy();
+
+        res.status(200).json({ message: "Project moved to trash successfully" });
     } catch (error) {
+        console.error("❌ Error deleting project:", error.message);
         res.status(500).json({ message: "Error deleting project", error: error.message });
     }
 });
+
+
+// ✅ Restore Deleted Project (Only Admin)
+router.put("/restore/:id", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
+    try {
+        const boardId = req.params.id;
+
+        // ✅ Find soft-deleted project
+        const board = await Board.findOne({ where: { id: boardId }, paranoid: false });
+        if (!board || board.deleted_at === null) {
+            return res.status(404).json({ message: "Project not found or not deleted" });
+        }
+
+        // ✅ Restore the project
+        await board.restore();
+
+        // ✅ Restore related tasks (if tasks also have soft delete enabled)
+        await Task.update({ deleted_at: null }, { where: { boardId: boardId }, paranoid: false });
+
+        // ✅ Restore project assignments
+        await ProjectAssignedUser.update({ deleted_at: null }, { where: { project_id: boardId }, paranoid: false });
+
+        res.status(200).json({ message: "Project restored successfully" });
+    } catch (error) {
+        console.error("❌ Error restoring project:", error.message);
+        res.status(500).json({ message: "Error restoring project", error: error.message });
+    }
+});
+
+//Op is used to create advanced queries like Op.ne (not equal), Op.like, etc.
+// It is part of Sequelize and allows you to build complex queries using operators.
+// ✅ Get all deleted users (trash) - Only Admin can access
+//If Op is not imported, Sequelize doesn’t recognize it, causing the error.
+// const { Op } = require("sequelize");
+router.get("/trash", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
+    try {
+        const deletedProjects = await Board.findAll({ 
+            where: { deleted_at: { [Op.ne]: null } }, 
+            paranoid: false 
+        });
+
+        res.status(200).json({ deletedProjects });
+    } catch (error) {
+        console.error("❌ Error fetching deleted projects:", error.message);
+        res.status(500).json({ message: "Error fetching deleted projects" });
+    }
+});
+
+router.delete("/trash/:id", authMiddleware, roleMiddleware(["admin"]), async (req, res) => {
+    try {
+        const boardId = req.params.id;
+
+        // Find the board
+        const board = await Board.findOne({ where: { id: boardId }, paranoid: false });
+        if (!board) {
+            return res.status(404).json({ message: "Project not found in trash" });
+        }
+
+        // Delete all related tasks
+        await Task.destroy({ where: { boardId }, force: true });
+
+        // Delete project assignments
+        await ProjectAssignedUser.destroy({ where: { project_id: boardId }, force: true });
+
+        // Permanently delete the project
+        await board.destroy({ force: true });
+
+        res.status(200).json({ message: "Project permanently deleted" });
+    } catch (error) {
+        console.error("❌ Error permanently deleting project:", error.message);
+        res.status(500).json({ message: "Error permanently deleting project" });
+    }
+});
+
+
+
 
 // ✅ Get All Projects Assigned to a Member
 router.get("/assigned-projects", authMiddleware, roleMiddleware(["MEMBER"]), async (req, res) => {

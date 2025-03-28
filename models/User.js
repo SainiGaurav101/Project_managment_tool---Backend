@@ -33,20 +33,17 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,  // Store image URL or filename
         allowNull: true,  // Existing users won’t be affected
         defaultValue: 'default-profile.png' // Dummy profile image for new users
-    }
+    },
+    deleted_at: {
+        type: DataTypes.DATE,
+        allowNull: true, // Allows soft delete
+        
+      },
 }, {
     tableName: 'users',
-    timestamps: true
+    timestamps: true,  // ✅ Ensure timestamps exist (createdAt, updatedAt)
+    paranoid: true, // ✅ Enables soft delete in Sequelize
+    deletedAt: "deleted_at",
 });
-
-
-// const Task = require("./Task");
-// const Board = require("./Board");
-
-// User.hasMany(Board, { foreignKey: "created_by" }); // A user (Manager) can create many boards
-// User.hasMany(Task, { foreignKey: "assigned_to" }); // A user (Member) can have multiple assigned tasks
-// User.hasMany(Task, { foreignKey: "created_by" }); // A user (Manager) can create multiple tasks
-
-
 
 module.exports = User;
